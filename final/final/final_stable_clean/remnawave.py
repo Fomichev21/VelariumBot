@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -136,15 +137,29 @@ class RemnawaveClient:
         user_id: int,
         tariff_code: str,
         expire_at: str,
+        telegram_username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
     ) -> RemnawaveAccess:
         payload: dict[str, Any] = {
-            "username": _build_username(user_id),
-            "expireAt": _to_api_datetime(expire_at),
+            "username": build_panel_username(
+                user_id=user_id,
+                telegram_username=telegram_username,
+                first_name=first_name,
+                last_name=last_name,
+            ),
+            "expireAt": to_api_datetime(expire_at),
             "status": "ACTIVE",
             "trafficLimitStrategy": settings.remnawave_traffic_limit_strategy,
             "trafficLimitBytes": settings.remnawave_traffic_limit_bytes,
             "telegramId": user_id,
-            "description": f"telegram:{user_id} tariff:{tariff_code}",
+            "description": build_description(
+                user_id=user_id,
+                tariff_code=tariff_code,
+                telegram_username=telegram_username,
+                first_name=first_name,
+                last_name=last_name,
+            ),
             "activeInternalSquads": [self.resolve_squad_uuid()],
         }
         if settings.remnawave_hwid_device_limit is not None:
@@ -153,18 +168,48 @@ class RemnawaveClient:
         data = self._request("POST", "/users", json=payload)
         if not isinstance(data, dict):
             raise RemnawaveError("Remnawave create user returned an invalid payload.")
-        return _user_to_access(data)
+        return user_to_access(data)
 
-    def update_user_expiry(self, remote_user_uuid: str, expire_at: str) -> RemnawaveAccess:
-        payload = {
+    def update_user(
+        self,
+        remote_user_uuid: str,
+        *,
+        expire_at: str,
+        user_id: int,
+        tariff_code: str,
+        telegram_username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+    ) -> RemnawaveAccess:
+        payload: dict[str, Any] = {
             "uuid": remote_user_uuid,
-            "expireAt": _to_api_datetime(expire_at),
+            "username": build_panel_username(
+                user_id=user_id,
+                telegram_username=telegram_username,
+                first_name=first_name,
+                last_name=last_name,
+            ),
+            "expireAt": to_api_datetime(expire_at),
             "status": "ACTIVE",
+            "telegramId": user_id,
+            "description": build_description(
+                user_id=user_id,
+                tariff_code=tariff_code,
+                telegram_username=telegram_username,
+                first_name=first_name,
+                last_name=last_name,
+            ),
+            "activeInternalSquads": [self.resolve_squad_uuid()],
+            "trafficLimitStrategy": settings.remnawave_traffic_limit_strategy,
+            "trafficLimitBytes": settings.remnawave_traffic_limit_bytes,
         }
+        if settings.remnawave_hwid_device_limit is not None:
+            payload["hwidDeviceLimit"] = settings.remnawave_hwid_device_limit
+
         data = self._request("PATCH", "/users", json=payload)
         if not isinstance(data, dict):
             raise RemnawaveError("Remnawave update user returned an invalid payload.")
-        return _user_to_access(data)
+        return user_to_access(data)
 
     def delete_user(self, remote_user_uuid: str) -> bool:
         data = self._request("DELETE", f"/users/{remote_user_uuid}")
@@ -173,30 +218,71 @@ class RemnawaveClient:
         return False
 
 
-def _build_username(user_id: int) -> str:
-    suffix = uuid.uuid4().hex[:8]
-    raw = f"{settings.remnawave_user_prefix}_{user_id}_{suffix}"
-    return raw[:36]
+def build_panel_username(
+    *,
+    user_id: int,
+    telegram_username: str | None,
+    first_name: str | None,
+    last_name: str | None,
+) -> str:
+    candidates = [
+        telegram_username,
+        " ".join(part for part in [first_name, last_name] if part),
+        first_name,
+        last_name,
+    ]
+    for candidate in candidates:
+        cleaned = sanitize_username(candidate or "")
+        if len(cleaned) >= 3:
+            return cleaned[:36]
+
+    suffix = uuid.uuid4().hex[:6]
+    return f"{settings.remnawave_user_prefix}_{user_id}_{suffix}"[:36]
 
 
-def _to_api_datetime(value: str) -> str:
-    dt = _parse_datetime(value)
-    return dt.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+def sanitize_username(value: str) -> str:
+    value = value.strip().lstrip("@")
+    value = re.sub(r"[^A-Za-z0-9_-]+", "_", value)
+    value = re.sub(r"_+", "_", value).strip("_-")
+    return value
 
 
-def _parse_datetime(value: str) -> datetime:
+def build_description(
+    *,
+    user_id: int,
+    tariff_code: str,
+    telegram_username: str | None,
+    first_name: str | None,
+    last_name: str | None,
+) -> str:
+    name = " ".join(part for part in [first_name, last_name] if part).strip()
+    tg_username = (telegram_username or "").strip()
+    bits = [f"telegram:{user_id}", f"tariff:{tariff_code}"]
+    if tg_username:
+        bits.append(f"username:@{tg_username.lstrip('@')}")
+    if name:
+        bits.append(f"name:{name}")
+    return " | ".join(bits)
+
+
+def to_api_datetime(value: str) -> str:
+    dt = parse_datetime(value)
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_datetime(value: str) -> datetime:
     normalized = value.strip().replace("Z", "+00:00")
     dt = datetime.fromisoformat(normalized)
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=UTC)
+        return dt.replace(tzinfo=timezone.utc)
     return dt
 
 
-def _user_to_access(user: dict[str, Any]) -> RemnawaveAccess:
+def user_to_access(user: dict[str, Any]) -> RemnawaveAccess:
     remote_user_uuid = str(user.get("uuid") or "").strip()
     short_uuid = str(user.get("shortUuid") or "").strip()
     subscription_url = str(user.get("subscriptionUrl") or "").strip()
-    expire_at = _from_api_datetime(str(user.get("expireAt") or ""))
+    expire_at = from_api_datetime(str(user.get("expireAt") or ""))
 
     if not remote_user_uuid or not short_uuid:
         raise RemnawaveError("Remnawave response is missing user identifiers.")
@@ -217,6 +303,6 @@ def _user_to_access(user: dict[str, Any]) -> RemnawaveAccess:
     )
 
 
-def _from_api_datetime(value: str) -> str:
-    dt = _parse_datetime(value)
-    return dt.astimezone(UTC).replace(tzinfo=None, microsecond=0).isoformat(sep=" ")
+def from_api_datetime(value: str) -> str:
+    dt = parse_datetime(value)
+    return dt.astimezone(timezone.utc).replace(tzinfo=None, microsecond=0).isoformat(sep=" ")
