@@ -41,6 +41,8 @@ def _ensure_users_table(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
+            first_name TEXT,
+            last_name TEXT,
             balance INTEGER DEFAULT 0,
             role INTEGER DEFAULT 1,
             subscription_until TEXT,
@@ -55,6 +57,8 @@ def _ensure_users_table(conn: sqlite3.Connection) -> None:
     columns = _column_names(conn, "users")
     migrations = {
         "balance": "ALTER TABLE users ADD COLUMN balance INTEGER DEFAULT 0",
+        "first_name": "ALTER TABLE users ADD COLUMN first_name TEXT",
+        "last_name": "ALTER TABLE users ADD COLUMN last_name TEXT",
         "role": "ALTER TABLE users ADD COLUMN role INTEGER DEFAULT 1",
         "subscription_until": "ALTER TABLE users ADD COLUMN subscription_until TEXT",
         "expiry_notice_for": "ALTER TABLE users ADD COLUMN expiry_notice_for TEXT",
@@ -217,15 +221,25 @@ def ensure_owner(user_id: int) -> None:
         conn.commit()
 
 
-def add_user(user_id: int, username: str | None, referred_by: int | None = None) -> None:
+def add_user(
+    user_id: int,
+    username: str | None,
+    referred_by: int | None = None,
+    *,
+    first_name: str | None = None,
+    last_name: str | None = None,
+) -> None:
     with closing(connect()) as conn:
         conn.execute(
             """
-            INSERT INTO users (user_id, username, referred_by)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET username=excluded.username
+            INSERT INTO users (user_id, username, first_name, last_name, referred_by)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username=excluded.username,
+                first_name=COALESCE(excluded.first_name, users.first_name),
+                last_name=COALESCE(excluded.last_name, users.last_name)
             """,
-            (user_id, username, referred_by),
+            (user_id, username, first_name, last_name, referred_by),
         )
         conn.execute(
             "UPDATE users SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE user_id = ?",
@@ -254,6 +268,8 @@ def get_user(user_id: int) -> dict[str, Any]:
     return {
         "user_id": user_id,
         "username": None,
+        "first_name": None,
+        "last_name": None,
         "balance": 0,
         "role": 1,
         "subscription_until": None,
@@ -517,6 +533,9 @@ def activate_subscription_days(user_id: int, duration_days: int, source_code: st
     user = get_user(user_id)
     existing_vpn_key = get_vpn_key(user_id)
     expire_at = _extend_subscription(user.get("subscription_until"), duration_days)
+    telegram_username = user.get("username")
+    first_name = user.get("first_name")
+    last_name = user.get("last_name")
 
     if is_remnawave_configured():
         client = RemnawaveClient()
@@ -525,19 +544,38 @@ def activate_subscription_days(user_id: int, duration_days: int, source_code: st
             remote_user_uuid = str(existing_vpn_key.get("vpn_key") or "") if existing_vpn_key else ""
             if remote_user_uuid and _looks_like_uuid(remote_user_uuid):
                 try:
-                    access = client.update_user_expiry(remote_user_uuid, expire_at)
+                    access = client.update_user(
+                        remote_user_uuid,
+                        expire_at=expire_at,
+                        user_id=user_id,
+                        tariff_code=source_code,
+                        telegram_username=telegram_username,
+                        first_name=first_name,
+                        last_name=last_name,
+                    )
                 except RemnawaveError:
                     access = None
 
             if access is None:
                 remote_user = client.find_user_by_telegram_id(user_id)
                 if remote_user:
-                    access = client.update_user_expiry(str(remote_user["uuid"]), expire_at)
+                    access = client.update_user(
+                        str(remote_user["uuid"]),
+                        expire_at=expire_at,
+                        user_id=user_id,
+                        tariff_code=source_code,
+                        telegram_username=telegram_username,
+                        first_name=first_name,
+                        last_name=last_name,
+                    )
                 else:
                     access = client.add_user(
                         user_id=user_id,
                         tariff_code=source_code,
                         expire_at=expire_at,
+                        telegram_username=telegram_username,
+                        first_name=first_name,
+                        last_name=last_name,
                     )
         finally:
             client.close()
