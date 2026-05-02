@@ -1,3 +1,0 @@
-aiogram
-requests
-aiohttp-socks
