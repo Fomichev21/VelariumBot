@@ -4,6 +4,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from config import ROLE_ADMIN
 from database import add_user, get_role
 
 router = Router()
@@ -11,7 +12,12 @@ router = Router()
 
 @router.message(Command("help"))
 async def help_cmd(message: Message) -> None:
-    add_user(message.from_user.id, message.from_user.username)
+    add_user(
+        message.from_user.id,
+        message.from_user.username,
+        first_name=message.from_user.first_name,
+        last_name=message.from_user.last_name,
+    )
 
     lines = [
         "Команды бота:",
