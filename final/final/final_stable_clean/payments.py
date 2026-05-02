@@ -64,12 +64,11 @@ async def deliver_access_message_async(payment_result: dict | None) -> bool:
     if not payment_id or payment.get("access_sent_at") or not access_url:
         return False
 
-    access_label = "Subscription Link" if access_url.startswith(("http://", "https://")) else "VPN ссылка"
     text = (
         "Оплата подтверждена.\n\n"
         f"Подписка активна до: {user.get('subscription_until') or 'не задано'}\n"
-        f"UUID: {vpn_key.get('vpn_key') or 'не задан'}\n"
-        f"{access_label}:\n{access_url}"
+        f"ID пользователя в панели: {vpn_key.get('vpn_key') or 'не задан'}\n"
+        f"Subscription URL:\n{access_url}"
     )
 
     try:
@@ -113,12 +112,12 @@ async def notify_admins_about_payment(bot: Bot, payment_id: str) -> int:
         return 0
 
     text = (
-        "Новый счет ожидает проверки.\n\n"
-        f"Счет: {payment['invoice_code'] or payment['id']}\n"
-        f"Платеж ID: {payment['id']}\n"
+        "Новый счёт ожидает проверки.\n\n"
+        f"Счёт: {payment['invoice_code'] or payment['id']}\n"
+        f"Платёж ID: {payment['id']}\n"
         f"Пользователь: {payment['user_id']}\n"
         f"Тариф: {TARIFFS[payment['tariff_code']]['title']}\n"
-        f"Сумма: {payment['amount']} RUB\n"
+        f"Сумма: {payment['amount']} ₽\n"
         f"Ссылка на оплату:\n{payment['payment_url']}"
     )
 
@@ -143,8 +142,8 @@ async def notify_payment_rejected(bot: Bot, payment: dict | None) -> bool:
             payment["user_id"],
             (
                 "Оплата не подтверждена администратором.\n\n"
-                f"Счет: {payment.get('invoice_code') or payment['id']}\n"
-                "Если вы уже оплатили счет, свяжитесь с поддержкой и приложите чек."
+                f"Счёт: {payment.get('invoice_code') or payment['id']}\n"
+                "Если ты уже оплатил, свяжись с поддержкой и приложи чек."
             ),
         )
     except Exception:
@@ -159,7 +158,7 @@ async def notify_subscription_reset(bot: Bot, user_id: int) -> bool:
             user_id,
             (
                 "Доступ к VPN и подписка были сброшены администратором.\n\n"
-                "Если это ошибка, напишите в поддержку."
+                "Если это ошибка, напиши в поддержку."
             ),
         )
     except Exception:
