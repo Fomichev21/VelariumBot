@@ -86,7 +86,7 @@ def tariff_menu() -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{tariff['title']} - {tariff['price']} RUB",
+                    text=f"{tariff['title']} • {tariff['price']} ₽",
                     callback_data=f"buy:{code}",
                 )
             ]
@@ -105,13 +105,23 @@ def payment_actions(payment_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _guard_user(message_or_callback: Message | CallbackQuery, referred_by: int | None = None) -> bool:
+def _remember_user(message_or_callback: Message | CallbackQuery, referred_by: int | None = None) -> None:
     user = message_or_callback.from_user
-    add_user(user.id, user.username, referred_by=referred_by)
-    if not is_banned(user.id):
+    add_user(
+        user.id,
+        user.username,
+        referred_by=referred_by,
+        first_name=user.first_name,
+        last_name=user.last_name,
+    )
+
+
+async def _guard_user(message_or_callback: Message | CallbackQuery, referred_by: int | None = None) -> bool:
+    _remember_user(message_or_callback, referred_by=referred_by)
+    if not is_banned(message_or_callback.from_user.id):
         return True
 
-    text = "Ваш аккаунт заблокирован. Напишите в поддержку, если это ошибка."
+    text = "Твой аккаунт заблокирован. Если это ошибка, напиши в поддержку."
     if isinstance(message_or_callback, CallbackQuery):
         await message_or_callback.answer(text, show_alert=True)
     else:
@@ -123,15 +133,19 @@ def profile_text(user_id: int) -> str:
     user = get_user(user_id)
     vpn_key = get_vpn_key(user_id)
     subscription = user["subscription_until"] or "не активна"
-    access_url = vpn_key["config_text"] if vpn_key else "еще не выдана"
+    access_url = vpn_key["config_text"] if vpn_key else "ещё не выдана"
     balance = get_balance(user_id)
+    username = f"@{user['username']}" if user.get("username") else "не указан"
+    name = " ".join(part for part in [user.get("first_name"), user.get("last_name")] if part).strip() or "не указано"
+
     return (
-        "Ваш профиль\n\n"
+        "Профиль\n\n"
         f"ID: {user['user_id']}\n"
-        f"Username: @{user['username'] or 'unknown'}\n"
-        f"Баланс: {balance} RUB\n"
+        f"Username: {username}\n"
+        f"Имя: {name}\n"
+        f"Баланс: {balance} ₽\n"
         f"Подписка до: {subscription}\n"
-        f"VPN ссылка: {access_url}"
+        f"Ссылка на доступ: {access_url}"
     )
 
 
@@ -146,7 +160,7 @@ def subscription_status_text(user_id: int) -> str:
 @router.message(CommandStart())
 async def start(message: Message) -> None:
     referred_by: int | None = None
-    args = message.text.split(maxsplit=1)
+    args = (message.text or "").split(maxsplit=1)
     if len(args) > 1 and args[1].startswith("ref_"):
         try:
             referred_by = int(args[1][4:])
@@ -160,8 +174,8 @@ async def start(message: Message) -> None:
 
     await send_start_banner(message)
     await message.answer(
-        "Добро пожаловать в VPN-бот.\n\n"
-        "Здесь можно оплатить тариф, дождаться подтверждения админа и получить ссылку для подключения.",
+        "Главное меню Velarium VPN.\n\n"
+        "Выбирай тариф, оплачивай, жди подтверждения админа и сразу получай свою ссылку на подписку.",
         reply_markup=main_menu(message.from_user.id),
     )
 
@@ -171,7 +185,7 @@ async def pay_cmd(message: Message) -> None:
     if not await _guard_user(message):
         return
     await message.answer(
-        "Выберите тариф.\n\nПосле оплаты администратор подтвердит перевод, и бот выдаст доступ автоматически.",
+        "Выбери тариф ниже. После подтверждения оплаты бот автоматически создаст тебе доступ и пришлёт ссылку на подписку.",
         reply_markup=tariff_menu(),
     )
 
@@ -182,7 +196,7 @@ async def gift_cmd(message: Message, state: FSMContext) -> None:
         return
     await state.set_state(UserStates.waiting_for_promo)
     await message.answer(
-        "Отправьте промокод одним сообщением.",
+        "Отправь промокод одним сообщением.",
         reply_markup=back_to_main_markup(message.from_user.id),
     )
 
@@ -199,8 +213,8 @@ async def ref_cmd(message: Message) -> None:
 
     await message.answer(
         "Реферальная программа\n\n"
-        "За каждого друга, который оплатит первую подписку, вы получите +3 дня к своей подписке.\n\n"
-        f"Ваша ссылка:\n{link}\n\n"
+        "За каждого друга, который оплатит первую подписку, ты получишь +3 дня к своему VPN.\n\n"
+        f"Твоя ссылка:\n{link}\n\n"
         f"Приглашено: {stats['total']}\n"
         f"С бонусом: {stats['rewarded']}",
         reply_markup=back_to_main_markup(user_id),
@@ -225,7 +239,7 @@ async def reset_cmd(message: Message) -> None:
         return
 
     if get_role(message.from_user.id) < ROLE_ADMIN:
-        await message.answer("Команда доступна только администраторам.")
+        await message.answer("Эта команда доступна только администраторам.")
         return
 
     parts = (message.text or "").split(maxsplit=1)
@@ -252,10 +266,9 @@ async def reset_cmd(message: Message) -> None:
 
     await notify_subscription_reset(message.bot, target_user_id)
     await message.answer(
-        (
-            f"Подписка пользователя {target_user_id} полностью сброшена.\n"
-            f"Доступ на сервере удален: {'да' if result['removed_remote'] else 'нет'}"
-        )
+        "Подписка полностью сброшена.\n\n"
+        f"Пользователь: {target_user_id}\n"
+        f"Удалено в панели: {'да' if result['removed_remote'] else 'нет'}"
     )
 
 
@@ -288,8 +301,7 @@ async def buy_menu(callback: CallbackQuery) -> None:
         return
     await callback.answer()
     await callback.message.edit_text(
-        "Выберите тариф.\n\n"
-        "После оплаты администратор проверит перевод вручную, а бот автоматически выдаст доступ после подтверждения.",
+        "Выбери тариф.\n\nПосле оплаты администратор подтвердит перевод, а бот автоматически создаст доступ в панели и пришлёт Subscription URL.",
         reply_markup=tariff_menu(),
     )
 
@@ -307,21 +319,22 @@ async def buy(callback: CallbackQuery) -> None:
     tariff = TARIFFS[tariff_code]
     payment = create_payment_for_tariff(callback.from_user.id, tariff_code)
     admins_notified = await notify_admins_about_payment(callback.bot, payment["id"])
+
+    warning_text = (
+        "\n\nВнимание: уведомление администраторам пока не доставлено. Проверь, что в базе есть хотя бы один админ или owner."
+        if admins_notified == 0
+        else ""
+    )
+
     await callback.answer()
     await callback.message.edit_text(
-        "Счет создан.\n\n"
-        f"Счет: {payment['invoice_code']}\n"
+        "Счёт создан.\n\n"
+        f"Номер счёта: {payment['invoice_code']}\n"
         f"Тариф: {tariff['title']}\n"
-        f"Сумма: {tariff['price']}₽\n"
-        "Статус: Ожидает оплату\n\n"
-        "Открой оплату по кнопке ниже, переведи деньги и затем нажми «Проверить оплату».\n"
-        "Администратор увидит этот счет и подтвердит его вручную."
-        + (
-            "\n\nВнимание: уведомление администраторам пока не доставлено. "
-            "Проверь, что в базе есть хотя бы один админ или owner."
-            if admins_notified == 0
-            else ""
-        ),
+        f"Сумма: {tariff['price']} ₽\n"
+        "Статус: ожидает оплату\n\n"
+        "Открой оплату по кнопке ниже, переведи деньги и потом нажми «Проверить оплату»."
+        f"{warning_text}",
         reply_markup=payment_actions(payment["id"]),
     )
 
@@ -334,42 +347,38 @@ async def payment_status(callback: CallbackQuery) -> None:
     payment_id = callback.data.split(":", maxsplit=1)[1]
     payment = check_payment(payment_id)
     if not payment:
-        await callback.answer("Платеж не найден", show_alert=True)
+        await callback.answer("Платёж не найден", show_alert=True)
         return
 
     if payment["status"] == "failed":
         await callback.answer("Оплата отклонена", show_alert=True)
         await callback.message.edit_text(
-            "Оплата по этому счету отклонена администратором.\n\n"
-            f"Счет: {payment.get('invoice_code') or payment_id}\n"
-            "Если ты уже оплатил счет, напиши в поддержку и приложи чек.",
+            "Оплата по этому счёту отклонена администратором.\n\n"
+            f"Счёт: {payment.get('invoice_code') or payment_id}\n"
+            "Если ты уже оплатил, напиши в поддержку и приложи чек.",
             reply_markup=payment_actions(payment_id),
         )
         return
 
     if payment["status"] != "paid":
-        await callback.answer("Платеж еще на проверке", show_alert=True)
+        await callback.answer("Платёж ещё на проверке", show_alert=True)
         await callback.message.edit_text(
-            "Платеж еще не подтвержден.\n\n"
-            f"Счет: {payment.get('invoice_code') or payment_id}\n"
-            "После оплаты администратор проверит перевод вручную.\n"
-            "Если ты уже оплатил, просто подожди ответа админа и нажми кнопку позже.",
+            "Платёж ещё не подтверждён.\n\n"
+            f"Счёт: {payment.get('invoice_code') or payment_id}\n"
+            "После оплаты просто дождись ответа админа и нажми кнопку позже.",
             reply_markup=payment_actions(payment_id),
         )
         return
 
     vpn_key = get_vpn_key(callback.from_user.id)
-    link_label = (
-        "Subscription Link"
-        if vpn_key and vpn_key["config_text"].startswith(("http://", "https://"))
-        else "VPN ссылка"
-    )
+    access_url = vpn_key["config_text"] if vpn_key else "ссылка ещё создаётся"
+
     await callback.answer("Оплата подтверждена")
     await callback.message.edit_text(
         "Оплата подтверждена.\n\n"
-        f"Счет: {payment.get('invoice_code') or payment_id}\n"
+        f"Счёт: {payment.get('invoice_code') or payment_id}\n"
         f"Подписка активна до: {get_user(callback.from_user.id)['subscription_until']}\n"
-        f"{link_label}: {vpn_key['config_text'] if vpn_key else 'создается'}",
+        f"Subscription URL:\n{access_url}",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="Получить ссылку", callback_data="download_config")],
@@ -386,22 +395,23 @@ async def download_config(callback: CallbackQuery) -> None:
 
     vpn_key = get_vpn_key(callback.from_user.id)
     if not vpn_key:
-        await callback.answer("Ссылка еще не подготовлена", show_alert=True)
+        await callback.answer("Ссылка ещё не подготовлена", show_alert=True)
         return
 
     await callback.answer()
-    config_bytes = vpn_key["config_text"].encode("utf-8")
-    file = BufferedInputFile(config_bytes, filename=build_download_name(callback.from_user.id))
-    if vpn_key["config_text"].startswith(("http://", "https://")):
+    config_text = str(vpn_key["config_text"])
+    if config_text.startswith(("http://", "https://")):
         await callback.message.answer(
-            "Вот ваш Subscription Link:\n\n"
-            f"{vpn_key['config_text']}"
+            "Твоя ссылка на подписку:\n\n"
+            f"{config_text}"
         )
         return
 
+    config_bytes = config_text.encode("utf-8")
+    file = BufferedInputFile(config_bytes, filename=build_download_name(callback.from_user.id))
     await callback.message.answer(
-        "Вот ваша VPN-ссылка:\n\n"
-        f"{vpn_key['config_text']}"
+        "Твоя VPN-ссылка:\n\n"
+        f"{config_text}"
     )
     await callback.message.answer_document(
         file,
@@ -417,7 +427,7 @@ async def promo(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(UserStates.waiting_for_promo)
     await callback.message.edit_text(
-        "Отправьте промокод одним сообщением.",
+        "Отправь промокод одним сообщением.",
         reply_markup=back_to_main_markup(callback.from_user.id),
     )
 
