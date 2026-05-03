@@ -9,7 +9,9 @@ from aiogram.exceptions import TelegramNetworkError
 
 from config import settings
 from database import init_db
-from handlers import admin, help, user
+from handlers.admin import router as admin_router
+from handlers.user import router as user_router
+from handlers.help import router as help_router
 from payments import process_expiry_reminders
 from remnawave import get_missing_remnawave_settings
 
